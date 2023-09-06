@@ -1,0 +1,165 @@
+# Kubernetes Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-demo-proxy
+  labels:
+    app: go-demo-proxy
+spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: go-demo-proxy
+    template:
+        metadata:
+          labels:
+            app: go-demo-proxy
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8080"
+            prometheus.io/path: "/metrics"
+        spec:
+          containers:
+            - name: go-demo-proxy
+              image: harbor.services.h2o-2-13047.h2o.vmware.com/other/go-demo-proxy:0.5.0
+              imagePullPolicy: Always
+              env:
+                - name: MY_NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                - name: MY_CPU_REQUEST
+                  valueFrom:
+                    resourceFieldRef:
+                      resource: requests.cpu
+                - name: MY_CPU_LIMIT
+                  valueFrom:
+                    resourceFieldRef:
+                      resource: limits.cpu
+                - name: MY_MEM_REQUEST
+                  valueFrom:
+                    resourceFieldRef:
+                      resource: requests.memory
+                - name: MY_MEM_LIMIT
+                  valueFrom:
+                    resourceFieldRef:
+                      resource: limits.memory
+                - name: PORT
+                  value: "8080"
+                - name: GO_DEMO_SERVICE_ONE_URL
+                  value: "http://go-demo-1.go-demo-1.svc.cluster.local"
+                - name: GO_DEMO_SERVICE_TWO_URL
+                  value: "http://go-demo-2.go-demo-2.svc.cluster.local"
+                - name: SERVICE_NAME
+                  value: "go-demo-proxy"
+                - name: SERVICE_VERSION
+                  value: "0.2.0"
+                - name: WAVEFRONT_PROXY_HOSTNAME
+                  value: "wavefront-proxy-tanzu.tanzu-observability-saas.svc.cluster.local"
+                - name: WAVEFRONT_PROXY_PORT
+                  value: "2878"
+                - name: ZIPKIN_HOST
+                  value: "wavefront-proxy-tanzu.tanzu-observability-saas.svc.cluster.local"
+                - name: ZIPKIN_PORT
+                  value: "9411"
+              ports:
+                - name: http
+                  containerPort: 8080
+                  protocol: TCP
+              livenessProbe:
+                httpGet:
+                  path: /
+                  port: http
+              readinessProbe:
+                httpGet:
+                  path: /
+                  port: http
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 16Mi
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-demo-proxy
+  labels:
+    app: go-demo-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: go-demo-proxy
+---
+# HPA
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: go-demo-proxy
+  labels:
+    app: go-demo-proxy
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-demo-proxy
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 40
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 40
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: go-demo-proxy-gateway
+spec:
+  selector:
+    istio: ingressgateway # use Istio default gateway implementation
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "go-demo-proxy.tsm-2.h2o-2-13047.h2o.vmware.com"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: go-demo-proxy
+spec:
+  hosts:
+    - "go-demo-proxy.tsm-2.h2o-2-13047.h2o.vmware.com"
+  gateways:
+    - go-demo-proxy-gateway
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            port:
+              number: 80
+            host: go-demo-proxy
+
+
